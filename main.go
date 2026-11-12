@@ -3,9 +3,10 @@ package main
 import (
 	"context"
 	"crypto/rand"
+	"embed"
 	"encoding/hex"
-	_ "embed"
 	"errors"
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
@@ -15,17 +16,17 @@ import (
 	"time"
 )
 
-//go:embed ui/index.html
-var indexHTML []byte
+//go:embed all:web/dist
+var webDist embed.FS
 
 type App struct {
 	store     *Store
 	resolver  *Resolver
+	auth      *Auth
 	client    *http.Client
 	queue     chan []byte
 	hookToken string
-	adminUser string
-	adminPass string
+	webFS     fs.FS
 }
 
 func main() {
@@ -63,14 +64,29 @@ func main() {
 		}
 	}
 
+	// Session signing key, persisted so logins survive restarts.
+	secretHex := store.Setting("session_secret")
+	if secretHex == "" {
+		secretHex = randomToken()
+		if err := store.SetSetting("session_secret", secretHex); err != nil {
+			log.Fatal(err)
+		}
+	}
+	secret, _ := hex.DecodeString(secretHex)
+
+	webFS, err := fs.Sub(webDist, "web/dist")
+	if err != nil {
+		log.Fatal(err)
+	}
+
 	client := &http.Client{Timeout: 15 * time.Second}
 	app := &App{
 		store:     store,
+		auth:      NewAuth(envOr("ADMIN_USER", "admin"), adminPass, secret),
 		client:    client,
 		queue:     make(chan []byte, 256),
 		hookToken: hookToken,
-		adminUser: envOr("ADMIN_USER", "admin"),
-		adminPass: adminPass,
+		webFS:     webFS,
 	}
 	app.resolver = NewResolver(func() (string, string) {
 		return store.Setting("coolify_url"), store.Setting("coolify_api_token")

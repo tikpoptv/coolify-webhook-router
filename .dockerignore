@@ -1,3 +1,5 @@
 .git
 data
 *.db
+web/node_modules
+web/dist

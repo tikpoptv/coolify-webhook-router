@@ -14,11 +14,11 @@ Coolify ──POST──▶ /hook/<token> ──▶ หาโปรเจค ─
 
    | ตัวแปร | จำเป็น | ความหมาย |
    |---|---|---|
-   | `ADMIN_PASSWORD` | ✔ | รหัสผ่านเข้าหน้า UI (user: `admin`, เปลี่ยนได้ด้วย `ADMIN_USER`) |
+   | `ADMIN_PASSWORD` | ✔ | รหัสผ่านเข้าหน้า UI (user: `admin`, เปลี่ยนได้ด้วย `ADMIN_USER`) — เปลี่ยนรหัสแล้วทุก session จะหลุด |
    | `HOOK_TOKEN` | | token ใน URL ของ webhook — ไม่ใส่ก็ได้ ระบบจะสุ่มให้และแสดงในหน้า UI |
    | `COOLIFY_URL`, `COOLIFY_API_TOKEN` | | ค่าเริ่มต้นของการเชื่อม Coolify API (ตั้งในหน้า UI แทนได้) |
 
-4. ผูกโดเมน (เช่น `hooks.example.com`) แล้วเปิดหน้าเว็บ ใส่รหัสผ่าน
+4. ผูกโดเมน (เช่น `hooks.example.com`) แล้วเปิดหน้าเว็บและเข้าสู่ระบบ
 5. ทำตามหน้า **ภาพรวม**: คัดลอก webhook URL ไปใส่ใน Coolify → Notifications → Webhook, เลือก event ทั้งหมด, กด Enable
 
 > Coolify ปฏิเสธ URL ที่เป็น IP ภายใน/localhost — ใช้โดเมนสาธารณะของ router หรือเพิ่มใน Settings → Advanced → Allowed internal targets
@@ -41,9 +41,22 @@ Coolify ──POST──▶ /hook/<token> ──▶ หาโปรเจค ─
 
 ข้อมูลจาก Coolify API เก็บแคช 5 นาที และโหลดใหม่ทันทีเมื่อเจอ uuid ใหม่ (ไม่เกินทุก 30 วินาที)
 
+## ความปลอดภัย
+
+- **หน้า UI:** login ด้วย session cookie (HttpOnly, SameSite=Strict, Secure เมื่อเป็น HTTPS) อายุ 7 วัน ใส่รหัสผิด 5 ครั้งจาก IP เดียวกันจะล็อก 5 นาที
+- **Webhook:** Coolify ไม่เซ็นชื่อ request จึงใช้ token สุ่มใน URL แทน — token ผิดจะได้ 404
+
 ## พัฒนา
 
+Backend เป็น Go, หน้าเว็บเป็น React + [Ant Design](https://ant.design) (โฟลเดอร์ `web/`) ซึ่ง build แล้วฝังเข้าไบนารีด้วย `go:embed`
+
 ```sh
-ADMIN_PASSWORD=dev go run .     # http://localhost:8080
+# รันแบบเดียวกับ production
+cd web && npm install && npm run build && cd ..
+ADMIN_PASSWORD=dev LISTEN_ADDR=:8787 go run .     # http://localhost:8787
+
+# แก้หน้าเว็บแบบ hot reload (เปิด Go server ด้านบนค้างไว้)
+cd web && npm run dev                              # http://localhost:5173
+
 go test ./...
 ```

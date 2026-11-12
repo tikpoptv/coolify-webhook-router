@@ -5,8 +5,11 @@ import (
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 	"time"
@@ -19,11 +22,10 @@ func (a *App) routes() http.Handler {
 	mux.HandleFunc("POST /hook/{token}", a.handleHook)
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
 
-	// Admin UI + API, behind basic auth.
+	// Admin API, behind a session cookie.
 	admin := http.NewServeMux()
-	admin.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
-		w.Header().Set("Content-Type", "text/html; charset=utf-8")
-		w.Write(indexHTML)
+	admin.HandleFunc("GET /api/me", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, 200, map[string]string{"user": a.auth.sessionUser(r)})
 	})
 	admin.HandleFunc("GET /api/overview", a.handleOverview)
 	admin.HandleFunc("PUT /api/settings", a.handleSettings)
@@ -53,20 +55,72 @@ func (a *App) routes() http.Handler {
 		respond(w, err, list)
 	})
 	admin.HandleFunc("POST /api/simulate", a.handleSimulate)
+	admin.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, 404, "ไม่พบ API นี้") })
 
-	mux.Handle("/", a.basicAuth(admin))
-	return mux
+	mux.HandleFunc("POST /api/login", a.handleLogin)
+	mux.HandleFunc("POST /api/logout", func(w http.ResponseWriter, r *http.Request) {
+		a.auth.clear(w, r)
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	})
+	mux.Handle("/api/", a.auth.require(admin))
+
+	// The web UI (built React app). Unknown paths fall back to index.html.
+	mux.Handle("/", spaHandler(a.webFS))
+	return securityHeaders(mux)
 }
 
-func (a *App) basicAuth(next http.Handler) http.Handler {
+func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Username string `json:"username"`
+		Password string `json:"password"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	ok, wait := a.auth.checkLogin(clientIP(r), in.Username, in.Password)
+	if wait > 0 {
+		writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("ใส่รหัสผิดหลายครั้ง ลองใหม่ในอีก %d นาที", int(wait.Minutes())+1))
+		return
+	}
+	if !ok {
+		writeErr(w, http.StatusUnauthorized, "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
+		return
+	}
+	a.auth.issue(w, r)
+	writeJSON(w, 200, map[string]string{"user": in.Username})
+}
+
+func spaHandler(webFS fs.FS) http.Handler {
+	files := http.FileServer(http.FS(webFS))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		u, p, ok := r.BasicAuth()
-		if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(a.adminUser)) != 1 ||
-			subtle.ConstantTimeCompare([]byte(p), []byte(a.adminPass)) != 1 {
-			w.Header().Set("WWW-Authenticate", `Basic realm="webhook-router", charset="UTF-8"`)
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
+		p := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if p != "" && p != "index.html" {
+			if f, err := webFS.Open(p); err == nil {
+				f.Close()
+				if strings.HasPrefix(p, "assets/") {
+					w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+				}
+				files.ServeHTTP(w, r)
+				return
+			}
+		}
+		index, err := fs.ReadFile(webFS, "index.html")
+		if err != nil {
+			http.Error(w, "web UI not built — run: cd web && npm install && npm run build", http.StatusNotFound)
 			return
 		}
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Header().Set("Cache-Control", "no-cache")
+		w.Write(index)
+	})
+}
+
+func securityHeaders(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h := w.Header()
+		h.Set("X-Content-Type-Options", "nosniff")
+		h.Set("X-Frame-Options", "DENY")
+		h.Set("Referrer-Policy", "no-referrer")
 		next.ServeHTTP(w, r)
 	})
 }

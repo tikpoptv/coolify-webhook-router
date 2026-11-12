@@ -9,6 +9,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/fstest"
 	"time"
 )
 
@@ -121,7 +122,8 @@ func TestEndToEnd(t *testing.T) {
 	must(t, store.SaveRule(&Rule{Project: "shop", DestinationID: shop.ID, Enabled: true}))
 	must(t, store.SetSetting("fallback_destination_id", "2"))
 
-	app := &App{store: store, client: http.DefaultClient, queue: make(chan []byte, 10), hookToken: "secret", adminUser: "admin", adminPass: "pw"}
+	app := &App{store: store, client: http.DefaultClient, queue: make(chan []byte, 10), hookToken: "secret",
+		auth: NewAuth("admin", "pw", []byte("k")), webFS: fstest.MapFS{"index.html": {Data: []byte("<html>")}}}
 	app.resolver = NewResolver(func() (string, string) { return store.Setting("coolify_url"), store.Setting("coolify_api_token") }, http.DefaultClient)
 	go app.worker()
 	srv := httptest.NewServer(app.routes())
@@ -191,5 +193,77 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestAuth(t *testing.T) {
+	app := &App{auth: NewAuth("admin", "pw", []byte("k")), webFS: fstest.MapFS{"index.html": {Data: []byte("<html>")}}}
+	srv := httptest.NewServer(app.routes())
+	defer srv.Close()
+
+	login := func(pass, ip string) *http.Response {
+		req, _ := http.NewRequest("POST", srv.URL+"/api/login", strings.NewReader(`{"username":"admin","password":"`+pass+`"}`))
+		req.Header.Set("X-Forwarded-For", ip)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp
+	}
+	me := func(c *http.Cookie) int {
+		req, _ := http.NewRequest("GET", srv.URL+"/api/me", nil)
+		if c != nil {
+			req.AddCookie(c)
+		}
+		resp, _ := http.DefaultClient.Do(req)
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := me(nil); code != 401 {
+		t.Fatalf("me without cookie: %d", code)
+	}
+	resp := login("pw", "1.1.1.1")
+	if resp.StatusCode != 200 || len(resp.Cookies()) != 1 {
+		t.Fatalf("login: %d %v", resp.StatusCode, resp.Cookies())
+	}
+	cookie := resp.Cookies()[0]
+	if !cookie.HttpOnly || cookie.SameSite != http.SameSiteStrictMode {
+		t.Fatalf("cookie flags: %+v", cookie)
+	}
+	if code := me(cookie); code != 200 {
+		t.Fatalf("me with cookie: %d", code)
+	}
+	forged := *cookie
+	forged.Value = cookie.Value[:len(cookie.Value)-2] + "00"
+	if code := me(&forged); code != 401 {
+		t.Fatalf("forged cookie accepted: %d", code)
+	}
+
+	// Changing the password invalidates sessions.
+	other := &App{auth: NewAuth("admin", "new", []byte("k")), webFS: app.webFS}
+	if other.auth.sessionUser(&http.Request{Header: http.Header{"Cookie": {cookie.String()}}}) != "" {
+		t.Fatal("session survived password change")
+	}
+
+	// Lockout after 5 failures, per IP.
+	for i := 0; i < 5; i++ {
+		if r := login("bad", "2.2.2.2"); r.StatusCode != 401 {
+			t.Fatalf("bad login %d: %d", i, r.StatusCode)
+		}
+	}
+	if r := login("pw", "2.2.2.2"); r.StatusCode != 429 {
+		t.Fatalf("expected lockout, got %d", r.StatusCode)
+	}
+	if r := login("pw", "3.3.3.3"); r.StatusCode != 200 {
+		t.Fatalf("other IP should not be locked: %d", r.StatusCode)
+	}
+
+	// SPA fallback serves index.html without auth.
+	r, _ := http.Get(srv.URL + "/rules")
+	r.Body.Close()
+	if r.StatusCode != 200 {
+		t.Fatalf("spa fallback: %d", r.StatusCode)
 	}
 }
