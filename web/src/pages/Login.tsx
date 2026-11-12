@@ -2,9 +2,12 @@ import { useState } from 'react'
 import { Alert, Button, Card, Flex, Form, Input, Typography, theme } from 'antd'
 import { LockOutlined, SwapOutlined, UserOutlined } from '@ant-design/icons'
 import { api, errorText } from '../api'
+import { useI18n } from '../i18n'
+import LangSwitch from '../components/LangSwitch'
 
 export default function Login({ onLogin }: { onLogin: (user: string) => void }) {
   const { token } = theme.useToken()
+  const { t } = useI18n()
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
 
@@ -22,25 +25,28 @@ export default function Login({ onLogin }: { onLogin: (user: string) => void }) 
   }
 
   return (
-    <Flex align="center" justify="center" style={{ minHeight: '100vh', padding: 16, background: token.colorBgLayout }}>
+    <Flex align="center" justify="center" style={{ minHeight: '100vh', padding: 16, background: token.colorBgLayout, position: 'relative' }}>
+      <div style={{ position: 'absolute', top: 16, right: 16 }}>
+        <LangSwitch />
+      </div>
       <Card style={{ width: '100%', maxWidth: 380 }}>
         <Flex vertical align="center" gap={4} style={{ marginBottom: 24 }}>
           <SwapOutlined style={{ fontSize: 32, color: token.colorPrimary }} />
           <Typography.Title level={4} style={{ margin: 0 }}>
             Webhook Router
           </Typography.Title>
-          <Typography.Text type="secondary">กระจายแจ้งเตือน Coolify ไปตามโปรเจค</Typography.Text>
+          <Typography.Text type="secondary">{t('login.tagline')}</Typography.Text>
         </Flex>
         {error && <Alert type="error" title={error} showIcon style={{ marginBottom: 16 }} />}
         <Form layout="vertical" onFinish={submit} initialValues={{ username: 'admin' }} requiredMark={false}>
-          <Form.Item name="username" label="ชื่อผู้ใช้" rules={[{ required: true, message: 'กรุณาใส่ชื่อผู้ใช้' }]}>
+          <Form.Item name="username" label={t('login.username')} rules={[{ required: true, message: t('login.usernameRequired') }]}>
             <Input prefix={<UserOutlined />} autoComplete="username" size="large" />
           </Form.Item>
-          <Form.Item name="password" label="รหัสผ่าน" rules={[{ required: true, message: 'กรุณาใส่รหัสผ่าน' }]}>
+          <Form.Item name="password" label={t('login.password')} rules={[{ required: true, message: t('login.passwordRequired') }]}>
             <Input.Password prefix={<LockOutlined />} autoComplete="current-password" size="large" autoFocus />
           </Form.Item>
           <Button type="primary" htmlType="submit" block size="large" loading={loading}>
-            เข้าสู่ระบบ
+            {t('login.submit')}
           </Button>
         </Form>
       </Card>

@@ -3,7 +3,6 @@ package main
 import (
 	"database/sql"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -82,7 +81,10 @@ type Delivery struct {
 
 type Store struct{ db *sql.DB }
 
-var errNotFound = errors.New("not found")
+var (
+	errNotFound    = errors.New("not found")
+	errDestMissing = L("ไม่พบปลายทางที่เลือก", "Selected destination not found")
+)
 
 func OpenStore(path string) (*Store, error) {
 	dsn := "file:" + path + "?_pragma=foreign_keys(1)&_pragma=busy_timeout(5000)&_pragma=journal_mode(WAL)"
@@ -155,10 +157,10 @@ func (s *Store) SaveDestination(d *Destination) error {
 	d.URL = strings.TrimSpace(d.URL)
 	d.ChatID = strings.TrimSpace(d.ChatID)
 	if d.Name == "" {
-		return fmt.Errorf("กรุณาใส่ชื่อปลายทาง")
+		return L("กรุณาใส่ชื่อปลายทาง", "Destination name is required")
 	}
 	if !destinationTypes[d.Type] {
-		return fmt.Errorf("ประเภทปลายทางไม่ถูกต้อง: %q", d.Type)
+		return L("ประเภทปลายทางไม่ถูกต้อง: %q", "Invalid destination type: %q", d.Type)
 	}
 	if d.ID != 0 && d.URL == "" {
 		old, err := s.GetDestination(d.ID)
@@ -168,13 +170,13 @@ func (s *Store) SaveDestination(d *Destination) error {
 		d.URL = old.URL
 	}
 	if d.URL == "" {
-		return fmt.Errorf("กรุณาใส่ URL หรือ token")
+		return L("กรุณาใส่ URL หรือ token", "URL or token is required")
 	}
 	if d.Type != "telegram" && !strings.HasPrefix(d.URL, "http://") && !strings.HasPrefix(d.URL, "https://") {
-		return fmt.Errorf("URL ต้องขึ้นต้นด้วย http:// หรือ https://")
+		return L("URL ต้องขึ้นต้นด้วย http:// หรือ https://", "URL must start with http:// or https://")
 	}
 	if d.Type == "telegram" && d.ChatID == "" {
-		return fmt.Errorf("Telegram ต้องใส่ chat ID")
+		return L("Telegram ต้องใส่ chat ID", "Telegram requires a chat ID")
 	}
 	if d.ID == 0 {
 		res, err := s.db.Exec(`INSERT INTO destinations(name, type, url, chat_id) VALUES(?, ?, ?, ?)`,
@@ -224,10 +226,10 @@ func (s *Store) SaveRule(r *Rule) error {
 	r.Environment = strings.TrimSpace(r.Environment)
 	r.Event = strings.TrimSpace(r.Event)
 	if r.Status != "" && r.Status != "success" && r.Status != "failure" {
-		return fmt.Errorf("status ต้องเป็น success หรือ failure")
+		return L("status ต้องเป็น success หรือ failure", "status must be success or failure")
 	}
 	if _, err := s.GetDestination(r.DestinationID); err != nil {
-		return fmt.Errorf("ไม่พบปลายทางที่เลือก")
+		return errDestMissing
 	}
 	if r.ID == 0 {
 		res, err := s.db.Exec(`INSERT INTO rules(project, environment, event, status, destination_id, enabled) VALUES(?, ?, ?, ?, ?, ?)`,

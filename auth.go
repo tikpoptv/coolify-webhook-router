@@ -100,7 +100,7 @@ func (a *Auth) sessionUser(r *http.Request) string {
 func (a *Auth) require(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if a.sessionUser(r) == "" {
-			writeErr(w, http.StatusUnauthorized, "กรุณาเข้าสู่ระบบ")
+			writeErr(w, http.StatusUnauthorized, L("กรุณาเข้าสู่ระบบ", "Please sign in"))
 			return
 		}
 		next.ServeHTTP(w, r)

@@ -1,26 +1,30 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Alert, App, AutoComplete, Button, Card, Col, Flex, Form, Modal, Popconfirm, Row, Select, Switch, Table, Tag, Tooltip, Typography } from 'antd'
 import { DeleteOutlined, EditOutlined, PlusOutlined } from '@ant-design/icons'
 import { api, errorText } from '../api'
+import { useI18n, type T } from '../i18n'
 import type { Destination, ProjectInfo, Rule } from '../types'
 import { EVENTS, TYPE_LABELS } from '../types'
 
-const anyTag = <Tag>ทั้งหมด</Tag>
-const pattern = (v: string) => (v ? <Typography.Text code>{v}</Typography.Text> : anyTag)
-
-const STATUS_TAG: Record<Rule['status'], ReactNode> = {
-  '': anyTag,
-  failure: <Tag color="error">ล้มเหลว</Tag>,
-  success: <Tag color="success">สำเร็จ</Tag>,
-}
+const statusTag = (s: Rule['status'], t: T) =>
+  s === 'failure' ? (
+    <Tag color="error">{t('common.failure')}</Tag>
+  ) : s === 'success' ? (
+    <Tag color="success">{t('common.success')}</Tag>
+  ) : (
+    <Tag>{t('common.all')}</Tag>
+  )
 
 export default function RulesPage() {
   const { message } = App.useApp()
+  const { t } = useI18n()
   const [rules, setRules] = useState<Rule[]>([])
   const [dests, setDests] = useState<Destination[]>([])
   const [projects, setProjects] = useState<ProjectInfo[]>([])
   const [loading, setLoading] = useState(true)
   const [editing, setEditing] = useState<Rule | 'new' | null>(null)
+
+  const pattern = (v: string) => (v ? <Typography.Text code>{v}</Typography.Text> : <Tag>{t('common.all')}</Tag>)
 
   const load = async () => {
     try {
@@ -42,14 +46,10 @@ export default function RulesPage() {
     load()
   }, [])
 
-  const save = async (rule: Rule) => {
-    await api(`/api/rules/${rule.id}`, { method: 'PUT', body: rule })
-  }
-
   const toggle = async (rule: Rule, enabled: boolean) => {
     setRules(rs => rs.map(r => (r.id === rule.id ? { ...r, enabled } : r)))
     try {
-      await save({ ...rule, enabled })
+      await api(`/api/rules/${rule.id}`, { method: 'PUT', body: { ...rule, enabled } })
     } catch (e) {
       message.error(errorText(e))
       load()
@@ -59,7 +59,7 @@ export default function RulesPage() {
   const remove = async (rule: Rule) => {
     try {
       await api(`/api/rules/${rule.id}`, { method: 'DELETE' })
-      message.success('ลบแล้ว')
+      message.success(t('common.deleted'))
       load()
     } catch (e) {
       message.error(errorText(e))
@@ -68,41 +68,36 @@ export default function RulesPage() {
 
   return (
     <Card
-      title="กฎการส่ง"
+      title={t('rules.title')}
       extra={
         <Button type="primary" icon={<PlusOutlined />} disabled={!dests.length} onClick={() => setEditing('new')}>
-          เพิ่มกฎ
+          {t('rules.add')}
         </Button>
       }
     >
-      {!loading && !dests.length && (
-        <Alert type="warning" showIcon title="ต้องเพิ่มปลายทางก่อน ถึงจะสร้างกฎได้" style={{ marginBottom: 16 }} />
-      )}
-      <Typography.Paragraph type="secondary">
-        เว้นว่าง = ทุกค่า · ใช้ <Typography.Text code>*</Typography.Text> ได้ เช่น{' '}
-        <Typography.Text code>backup_*</Typography.Text> · event หนึ่งตรงได้หลายกฎ จะส่งไปทุกปลายทางที่ตรง (ไม่ส่งซ้ำ) ·
-        ไม่ตรงกฎไหนเลยจะไปช่องสำรอง
-      </Typography.Paragraph>
+      {!loading && !dests.length && <Alert type="warning" showIcon title={t('rules.needDest')} style={{ marginBottom: 16 }} />}
+      <Typography.Paragraph type="secondary">{t('rules.help')}</Typography.Paragraph>
       <Table<Rule>
         rowKey="id"
         loading={loading}
         dataSource={rules}
         pagination={false}
         scroll={{ x: 720 }}
-        locale={{ emptyText: 'ยังไม่มีกฎ — ทุก event จะไปที่ช่องสำรอง' }}
+        locale={{ emptyText: t('rules.empty') }}
+        rowClassName={r => (r.enabled ? '' : 'rule-disabled')}
         columns={[
           {
-            title: 'เปิด',
+            title: t('rules.col.enabled'),
             dataIndex: 'enabled',
             width: 70,
             render: (v: boolean, r) => <Switch size="small" checked={v} onChange={c => toggle(r, c)} />,
           },
-          { title: 'โปรเจค', dataIndex: 'project', render: pattern },
-          { title: 'Environment', dataIndex: 'environment', render: pattern },
-          { title: 'Event', dataIndex: 'event', render: pattern },
-          { title: 'สถานะ', dataIndex: 'status', render: (s: Rule['status']) => STATUS_TAG[s] },
+          { title: t('common.project'), dataIndex: 'project', render: pattern },
+          { title: t('common.environment'), dataIndex: 'environment', render: pattern },
+          { title: t('common.event'), dataIndex: 'event', render: pattern },
+          { title: t('common.status'), dataIndex: 'status', render: (s: Rule['status']) => statusTag(s, t) },
           {
-            title: 'ส่งไปที่',
+            title: t('common.sendTo'),
             dataIndex: 'destination_name',
             render: v => <Typography.Text strong>→ {v}</Typography.Text>,
           },
@@ -112,14 +107,14 @@ export default function RulesPage() {
             width: 100,
             render: (_, r) => (
               <Flex gap={4} justify="end">
-                <Tooltip title="แก้ไข">
+                <Tooltip title={t('common.edit')}>
                   <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(r)} />
                 </Tooltip>
                 <Popconfirm
-                  title="ลบกฎนี้?"
-                  okText="ลบ"
+                  title={t('rules.confirmDelete')}
+                  okText={t('common.delete')}
                   okButtonProps={{ danger: true }}
-                  cancelText="ยกเลิก"
+                  cancelText={t('common.cancel')}
                   onConfirm={() => remove(r)}
                 >
                   <Button size="small" danger icon={<DeleteOutlined />} />
@@ -128,7 +123,6 @@ export default function RulesPage() {
             ),
           },
         ]}
-        rowClassName={r => (r.enabled ? '' : 'rule-disabled')}
       />
       {editing && (
         <RuleModal
@@ -162,6 +156,7 @@ function RuleModal({
   onSaved: () => void
 }) {
   const { message } = App.useApp()
+  const { t } = useI18n()
   const [form] = Form.useForm<FormValues>()
   const [saving, setSaving] = useState(false)
   const project = Form.useWatch('project', form)
@@ -172,8 +167,7 @@ function RuleModal({
     return envs.map(e => ({ value: e }))
   }, [projects, project])
 
-  const filter = (input: string, option?: { value: string }) =>
-    !!option?.value.toLowerCase().includes(input.toLowerCase())
+  const filter = (input: string, option?: { value: string }) => !!option?.value.toLowerCase().includes(input.toLowerCase())
 
   const submit = async (values: FormValues) => {
     setSaving(true)
@@ -187,7 +181,7 @@ function RuleModal({
     }
     try {
       await api(initial ? `/api/rules/${initial.id}` : '/api/rules', { method: initial ? 'PUT' : 'POST', body })
-      message.success(initial ? 'แก้ไขแล้ว' : 'เพิ่มกฎแล้ว — มีผลทันที')
+      message.success(initial ? t('common.updated') : t('rules.added'))
       onSaved()
     } catch (e) {
       message.error(errorText(e))
@@ -200,9 +194,9 @@ function RuleModal({
     <Modal
       open
       width={640}
-      title={initial ? 'แก้ไขกฎ' : 'เพิ่มกฎ'}
-      okText={initial ? 'บันทึก' : 'เพิ่ม'}
-      cancelText="ยกเลิก"
+      title={initial ? t('rules.editTitle') : t('rules.add')}
+      okText={initial ? t('common.save') : t('common.add')}
+      cancelText={t('common.cancel')}
       confirmLoading={saving}
       onOk={() => form.submit()}
       onCancel={onClose}
@@ -213,51 +207,47 @@ function RuleModal({
         layout="vertical"
         requiredMark={false}
         onFinish={submit}
-        initialValues={
-          initial
-            ? { ...initial }
-            : { project: '', environment: '', event: '', status: '', destination_id: dests[0]?.id }
-        }
+        initialValues={initial ? { ...initial } : { project: '', environment: '', event: '', status: '', destination_id: dests[0]?.id }}
       >
         <Row gutter={16}>
           <Col xs={24} sm={12}>
-            <Form.Item name="project" label="โปรเจค" extra={projects.length ? undefined : 'เชื่อม Coolify API เพื่อให้มีรายชื่อให้เลือก'}>
+            <Form.Item name="project" label={t('common.project')} extra={projects.length ? undefined : t('rules.connectHint')}>
               <AutoComplete
                 allowClear
-                placeholder="ทุกโปรเจค"
+                placeholder={t('rules.anyProject')}
                 options={projects.map(p => ({ value: p.name }))}
                 filterOption={filter}
               />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12}>
-            <Form.Item name="environment" label="Environment">
-              <AutoComplete allowClear placeholder="ทุก environment" options={envOptions} filterOption={filter} />
+            <Form.Item name="environment" label={t('common.environment')}>
+              <AutoComplete allowClear placeholder={t('rules.anyEnv')} options={envOptions} filterOption={filter} />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12}>
-            <Form.Item name="event" label="Event">
+            <Form.Item name="event" label={t('common.event')}>
               <AutoComplete
                 allowClear
-                placeholder="ทุก event"
+                placeholder={t('rules.anyEvent')}
                 options={EVENTS.map(e => ({ value: e }))}
                 filterOption={filter}
               />
             </Form.Item>
           </Col>
           <Col xs={24} sm={12}>
-            <Form.Item name="status" label="สถานะ">
+            <Form.Item name="status" label={t('common.status')}>
               <Select
                 options={[
-                  { value: '', label: 'ทั้งหมด' },
-                  { value: 'failure', label: 'เฉพาะที่ล้มเหลว / แจ้งเตือน' },
-                  { value: 'success', label: 'เฉพาะที่สำเร็จ' },
+                  { value: '', label: t('common.all') },
+                  { value: 'failure', label: t('rules.status.failure') },
+                  { value: 'success', label: t('rules.status.success') },
                 ]}
               />
             </Form.Item>
           </Col>
           <Col xs={24}>
-            <Form.Item name="destination_id" label="ส่งไปที่" rules={[{ required: true, message: 'เลือกปลายทาง' }]}>
+            <Form.Item name="destination_id" label={t('common.sendTo')} rules={[{ required: true, message: t('rules.destRequired') }]}>
               <Select options={dests.map(d => ({ value: d.id, label: `${d.name} · ${TYPE_LABELS[d.type]}` }))} />
             </Form.Item>
           </Col>

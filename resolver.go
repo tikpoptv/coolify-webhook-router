@@ -55,7 +55,7 @@ const (
 	missCooldown = 30 * time.Second
 )
 
-var errNotConfigured = errors.New("ยังไม่ได้ตั้งค่า Coolify URL / API token")
+var errNotConfigured = L("ยังไม่ได้ตั้งค่า Coolify URL / API token", "Coolify URL / API token not set")
 
 func NewResolver(cfg func() (string, string), client *http.Client) *Resolver {
 	return &Resolver{cfg: cfg, client: client, byUUID: map[string]Location{}}
@@ -157,7 +157,7 @@ func (r *Resolver) load(ctx context.Context) error {
 func (r *Resolver) get(ctx context.Context, base, token, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
 	if err != nil {
-		return fmt.Errorf("Coolify URL ไม่ถูกต้อง: %w", err)
+		return L("Coolify URL ไม่ถูกต้อง: %v", "Invalid Coolify URL: %v", err)
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Accept", "application/json")
@@ -167,15 +167,16 @@ func (r *Resolver) get(ctx context.Context, base, token, path string, out any) e
 		if errors.As(err, &ue) {
 			err = ue.Err
 		}
-		return fmt.Errorf("เรียก Coolify API ไม่ได้: %w", err)
+		return L("เรียก Coolify API ไม่ได้: %v", "Cannot reach the Coolify API: %v", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
 		snippet, _ := io.ReadAll(io.LimitReader(resp.Body, 200))
-		return fmt.Errorf("Coolify API %s ตอบ HTTP %d: %s", path, resp.StatusCode, strings.TrimSpace(string(snippet)))
+		msg := strings.TrimSpace(string(snippet))
+		return L("Coolify API %s ตอบ HTTP %d: %s", "Coolify API %s returned HTTP %d: %s", path, resp.StatusCode, msg)
 	}
 	if err := json.NewDecoder(io.LimitReader(resp.Body, 32<<20)).Decode(out); err != nil {
-		return fmt.Errorf("อ่านผลจาก Coolify API %s ไม่ได้: %w", path, err)
+		return L("อ่านผลจาก Coolify API %s ไม่ได้: %v", "Cannot parse Coolify API %s response: %v", path, err)
 	}
 	return nil
 }
@@ -186,7 +187,7 @@ func (r *Resolver) Projects() []ProjectInfo {
 	return append([]ProjectInfo{}, r.projects...)
 }
 
-func (r *Resolver) Status() ResolverStatus {
+func (r *Resolver) Status(lang string) ResolverStatus {
 	base, token := r.cfg()
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -197,7 +198,7 @@ func (r *Resolver) Status() ResolverStatus {
 		LoadedAt:   r.loadedAt,
 	}
 	if r.lastErr != nil {
-		s.Error = r.lastErr.Error()
+		s.Error = localize(r.lastErr, lang)
 	}
 	return s
 }

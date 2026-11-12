@@ -2,20 +2,15 @@ import { useEffect, useState } from 'react'
 import { Alert, App, Button, Card, Flex, Form, Input, Modal, Popconfirm, Select, Table, Tag, Tooltip, Typography } from 'antd'
 import { DeleteOutlined, EditOutlined, PlusOutlined, SendOutlined } from '@ant-design/icons'
 import { api, errorText } from '../api'
+import { useI18n, type MessageKey } from '../i18n'
 import type { Destination, DestinationType, Rule } from '../types'
 import { TYPE_COLORS, TYPE_LABELS } from '../types'
-
-const HINTS: Record<DestinationType, string> = {
-  discord: 'Discord: Server Settings → Integrations → Webhooks → New Webhook → Copy Webhook URL',
-  slack: 'Slack: สร้าง Incoming Webhook ใน app ของ workspace (Mattermost ใช้ incoming webhook ได้เหมือนกัน)',
-  telegram: 'Telegram: สร้าง bot กับ @BotFather เอา token มาใส่ แล้วเพิ่ม bot เข้ากลุ่ม ใช้ chat ID ของกลุ่ม',
-  webhook: 'ส่ง JSON เดิมจาก Coolify ต่อไปยัง URL นี้ (เติม project / environment ให้ถ้าหาได้)',
-}
 
 type FormValues = { name: string; type: DestinationType; url: string; chat_id: string }
 
 export default function DestinationsPage() {
   const { message } = App.useApp()
+  const { t } = useI18n()
   const [dests, setDests] = useState<Destination[]>([])
   const [rules, setRules] = useState<Rule[]>([])
   const [loading, setLoading] = useState(true)
@@ -37,13 +32,15 @@ export default function DestinationsPage() {
     load()
   }, [])
 
+  const ruleCount = (d: Destination) => rules.filter(r => r.destination_id === d.id).length
+
   const test = async (d: Destination) => {
     setTesting(d.id)
     try {
       await api(`/api/destinations/${d.id}/test`, { method: 'POST' })
-      message.success(`ส่งไป ${d.name} สำเร็จ`)
+      message.success(t('dest.testOk', { name: d.name }))
     } catch (e) {
-      message.error(`ส่งไม่สำเร็จ: ${errorText(e)}`)
+      message.error(t('dest.testFail', { error: errorText(e) }))
     } finally {
       setTesting(null)
     }
@@ -52,7 +49,7 @@ export default function DestinationsPage() {
   const remove = async (d: Destination) => {
     try {
       await api(`/api/destinations/${d.id}`, { method: 'DELETE' })
-      message.success('ลบแล้ว')
+      message.success(t('common.deleted'))
       load()
     } catch (e) {
       message.error(errorText(e))
@@ -61,10 +58,10 @@ export default function DestinationsPage() {
 
   return (
     <Card
-      title="ปลายทาง"
+      title={t('dest.title')}
       extra={
         <Button type="primary" icon={<PlusOutlined />} onClick={() => setEditing('new')}>
-          เพิ่มปลายทาง
+          {t('dest.add')}
         </Button>
       }
     >
@@ -74,12 +71,16 @@ export default function DestinationsPage() {
         dataSource={dests}
         pagination={false}
         scroll={{ x: 640 }}
-        locale={{ emptyText: 'ยังไม่มีปลายทาง — กด "เพิ่มปลายทาง" ได้เลย' }}
+        locale={{ emptyText: t('dest.empty') }}
         columns={[
-          { title: 'ชื่อ', dataIndex: 'name', render: v => <Typography.Text strong>{v}</Typography.Text> },
-          { title: 'ประเภท', dataIndex: 'type', render: (t: DestinationType) => <Tag color={TYPE_COLORS[t]}>{TYPE_LABELS[t]}</Tag> },
+          { title: t('dest.col.name'), dataIndex: 'name', render: v => <Typography.Text strong>{v}</Typography.Text> },
           {
-            title: 'URL / token',
+            title: t('dest.col.type'),
+            dataIndex: 'type',
+            render: (type: DestinationType) => <Tag color={TYPE_COLORS[type]}>{TYPE_LABELS[type]}</Tag>,
+          },
+          {
+            title: t('dest.col.url'),
             dataIndex: 'url',
             render: (v, d) => (
               <Flex vertical>
@@ -90,31 +91,27 @@ export default function DestinationsPage() {
               </Flex>
             ),
           },
-          {
-            title: 'กฎ',
-            width: 70,
-            render: (_, d) => rules.filter(r => r.destination_id === d.id).length,
-          },
+          { title: t('dest.col.rules'), width: 80, render: (_, d) => ruleCount(d) },
           {
             key: 'actions',
             align: 'right',
-            width: 210,
+            width: 230,
             render: (_, d) => {
-              const n = rules.filter(r => r.destination_id === d.id).length
+              const n = ruleCount(d)
               return (
                 <Flex gap={4} justify="end">
                   <Button size="small" icon={<SendOutlined />} loading={testing === d.id} onClick={() => test(d)}>
-                    ส่งทดสอบ
+                    {t('dest.test')}
                   </Button>
-                  <Tooltip title="แก้ไข">
+                  <Tooltip title={t('common.edit')}>
                     <Button size="small" icon={<EditOutlined />} onClick={() => setEditing(d)} />
                   </Tooltip>
                   <Popconfirm
-                    title={`ลบ "${d.name}"?`}
-                    description={n ? `กฎที่ส่งไปที่นี่ ${n} กฎจะถูกลบด้วย` : undefined}
-                    okText="ลบ"
+                    title={t('dest.confirmDelete', { name: d.name })}
+                    description={n ? t('dest.confirmDeleteRules', { n }) : undefined}
+                    okText={t('common.delete')}
                     okButtonProps={{ danger: true }}
-                    cancelText="ยกเลิก"
+                    cancelText={t('common.cancel')}
                     onConfirm={() => remove(d)}
                   >
                     <Button size="small" danger icon={<DeleteOutlined />} />
@@ -149,6 +146,7 @@ function DestinationModal({
   onSaved: () => void
 }) {
   const { message } = App.useApp()
+  const { t } = useI18n()
   const [form] = Form.useForm<FormValues>()
   const type = Form.useWatch('type', form) ?? initial?.type ?? 'discord'
   const [saving, setSaving] = useState(false)
@@ -161,7 +159,7 @@ function DestinationModal({
         method: initial ? 'PUT' : 'POST',
         body: { ...values, chat_id: values.chat_id ?? '' },
       })
-      message.success(initial ? 'แก้ไขแล้ว' : 'เพิ่มแล้ว — ลองกด "ส่งทดสอบ"')
+      message.success(initial ? t('common.updated') : t('dest.added'))
       onSaved()
     } catch (e) {
       message.error(errorText(e))
@@ -173,9 +171,9 @@ function DestinationModal({
   return (
     <Modal
       open
-      title={initial ? `แก้ไข ${initial.name}` : 'เพิ่มปลายทาง'}
-      okText={initial ? 'บันทึก' : 'เพิ่ม'}
-      cancelText="ยกเลิก"
+      title={initial ? t('dest.editTitle', { name: initial.name }) : t('dest.add')}
+      okText={initial ? t('common.save') : t('common.add')}
+      cancelText={t('common.cancel')}
       confirmLoading={saving}
       onOk={() => form.submit()}
       onCancel={onClose}
@@ -188,30 +186,29 @@ function DestinationModal({
         onFinish={submit}
         initialValues={initial ? { name: initial.name, type: initial.type, chat_id: initial.chat_id, url: '' } : { type: 'discord' }}
       >
-        <Form.Item name="name" label="ชื่อ" rules={[{ required: true, message: 'กรุณาใส่ชื่อ' }]}>
-          <Input placeholder="เช่น discord-shop-prod" />
+        <Form.Item name="name" label={t('dest.name')} rules={[{ required: true, message: t('dest.nameRequired') }]}>
+          <Input placeholder={t('dest.namePlaceholder')} />
         </Form.Item>
-        <Form.Item name="type" label="ประเภท">
-          <Select options={(Object.keys(TYPE_LABELS) as DestinationType[]).map(t => ({ value: t, label: TYPE_LABELS[t] }))} />
+        <Form.Item name="type" label={t('dest.type')}>
+          <Select options={(Object.keys(TYPE_LABELS) as DestinationType[]).map(v => ({ value: v, label: TYPE_LABELS[v] }))} />
         </Form.Item>
-        <Alert type="info" title={HINTS[type]} style={{ marginBottom: 16 }} />
+        <Alert type="info" title={t(`dest.hint.${type}` as MessageKey)} style={{ marginBottom: 16 }} />
         <Form.Item
           name="url"
-          label={isTelegram ? 'Bot token' : 'Webhook URL'}
-          extra={initial ? 'เว้นว่างเพื่อใช้ค่าเดิม' : undefined}
+          label={isTelegram ? t('dest.botToken') : t('dest.webhookUrl')}
+          extra={initial ? t('dest.keepBlank') : undefined}
           rules={[
-            { required: !initial, message: isTelegram ? 'กรุณาใส่ bot token' : 'กรุณาใส่ URL' },
-            ...(isTelegram ? [] : [{ pattern: /^https?:\/\//, message: 'ต้องขึ้นต้นด้วย http:// หรือ https://' }]),
+            { required: !initial, message: isTelegram ? t('dest.tokenRequired') : t('dest.urlRequired') },
+            ...(isTelegram ? [] : [{ pattern: /^https?:\/\//, message: t('common.urlScheme') }]),
           ]}
         >
           <Input.Password
-            visibilityToggle
             autoComplete="off"
             placeholder={initial ? '••••••' : isTelegram ? '123456:ABC-DEF…' : 'https://…'}
           />
         </Form.Item>
         {isTelegram && (
-          <Form.Item name="chat_id" label="Chat ID" rules={[{ required: true, message: 'กรุณาใส่ chat ID' }]}>
+          <Form.Item name="chat_id" label={t('dest.chatId')} rules={[{ required: true, message: t('dest.chatIdRequired') }]}>
             <Input placeholder="-1001234567890" />
           </Form.Item>
         )}

@@ -163,7 +163,8 @@ type routeError string
 
 func (r routeError) Error() string { return string(r) }
 
-const errNoRoute = routeError("ไม่มีกฎที่ตรง และยังไม่ได้ตั้งช่องสำรอง")
+// errNoRoute is stored in history verbatim; the UI translates it.
+const errNoRoute = routeError("no matching rule and no fallback destination")
 
 func (a *App) record(e Event, dest string, body []byte, err error) {
 	d := Delivery{

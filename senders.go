@@ -48,7 +48,7 @@ func (a *App) send(ctx context.Context, d Destination, e Event) error {
 		}
 		target, body = d.URL, fwd
 	default:
-		return fmt.Errorf("ไม่รู้จักประเภทปลายทาง %q", d.Type)
+		return fmt.Errorf("unknown destination type %q", d.Type)
 	}
 	b, err := json.Marshal(body)
 	if err != nil {
@@ -182,7 +182,7 @@ func postJSON(ctx context.Context, client *http.Client, target string, body []by
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
 		if err != nil {
-			return errors.New("URL ปลายทางไม่ถูกต้อง")
+			return errors.New("invalid destination URL")
 		}
 		req.Header.Set("Content-Type", "application/json")
 		req.Header.Set("User-Agent", "coolify-webhook-router")

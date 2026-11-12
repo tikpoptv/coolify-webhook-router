@@ -2,11 +2,13 @@ import { useEffect, useState } from 'react'
 import { Alert, App, Button, Card, Col, Flex, Form, Input, Row, Select, Skeleton, Statistic, Typography } from 'antd'
 import { ApiOutlined, LinkOutlined, ReloadOutlined, SafetyOutlined } from '@ant-design/icons'
 import { api, errorText } from '../api'
+import { useI18n } from '../i18n'
 import type { Destination, Overview } from '../types'
 import { TYPE_LABELS } from '../types'
 
 export default function OverviewPage() {
   const { message } = App.useApp()
+  const { t, lang, dateLocale } = useI18n()
   const [ov, setOv] = useState<Overview>()
   const [dests, setDests] = useState<Destination[]>([])
   const [saving, setSaving] = useState(false)
@@ -18,6 +20,7 @@ export default function OverviewPage() {
     form.setFieldsValue({ coolify_url: o.coolify_url, coolify_api_token: '' })
   }
 
+  // Reload when the language changes so server-side status messages follow it.
   useEffect(() => {
     Promise.all([api<Overview>('/api/overview'), api<Destination[]>('/api/destinations')])
       .then(([o, d]) => {
@@ -25,7 +28,7 @@ export default function OverviewPage() {
         setDests(d)
       })
       .catch(e => message.error(errorText(e)))
-  }, [])
+  }, [lang])
 
   if (!ov) return <Skeleton active />
 
@@ -36,8 +39,8 @@ export default function OverviewPage() {
     try {
       const o = await api<Overview>('/api/settings', { method: 'PUT', body: values })
       apply(o)
-      if (o.coolify.error) message.warning('บันทึกแล้ว แต่เชื่อมต่อ Coolify ไม่สำเร็จ')
-      else message.success('บันทึกแล้ว')
+      if (o.coolify.error) message.warning(t('overview.coolify.savedButFailed'))
+      else message.success(t('common.saved'))
     } catch (e) {
       message.error(errorText(e))
     } finally {
@@ -59,7 +62,7 @@ export default function OverviewPage() {
   const saveFallback = async (id: number) => {
     try {
       apply(await api<Overview>('/api/settings', { method: 'PUT', body: { fallback_destination_id: id } }))
-      message.success('บันทึกช่องสำรองแล้ว')
+      message.success(t('overview.fallback.saved'))
     } catch (e) {
       message.error(errorText(e))
     }
@@ -72,15 +75,13 @@ export default function OverviewPage() {
       <Card
         title={
           <Flex gap={8}>
-            <LinkOutlined /> 1. ใส่ URL นี้ใน Coolify
+            <LinkOutlined /> {t('overview.hook.title')}
           </Flex>
         }
       >
-        <Typography.Paragraph type="secondary">
-          Coolify → Notifications → Webhook → <b>Webhook URL</b> แล้วกด Enable และเลือก event ทั้งหมดได้เลย router จะคัดให้เอง
-        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary">{t('overview.hook.help')}</Typography.Paragraph>
         <Typography.Paragraph
-          copyable={{ text: hookUrl, tooltips: ['คัดลอก', 'คัดลอกแล้ว'] }}
+          copyable={{ text: hookUrl, tooltips: [t('overview.copy'), t('overview.copied')] }}
           code
           style={{ marginBottom: 0, wordBreak: 'break-all' }}
         >
@@ -91,42 +92,39 @@ export default function OverviewPage() {
       <Card
         title={
           <Flex gap={8}>
-            <ApiOutlined /> 2. เชื่อมต่อ Coolify API
+            <ApiOutlined /> {t('overview.coolify.title')}
           </Flex>
         }
         extra={
           <Button icon={<ReloadOutlined />} onClick={refresh} loading={refreshing} disabled={!c.configured}>
-            โหลดใหม่
+            {t('common.reload')}
           </Button>
         }
       >
-        <Typography.Paragraph type="secondary">
-          ใช้หาว่า backup, scheduled task และ image scan เป็นของโปรเจคไหน (event deploy มีชื่อโปรเจคมาอยู่แล้ว) — สร้าง
-          token ที่ Coolify → Keys &amp; Tokens → API tokens สิทธิ์ <b>read</b> ก็พอ
-        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary">{t('overview.coolify.help')}</Typography.Paragraph>
 
         {!c.configured ? (
           <Alert
             type="info"
             showIcon
-            title="ยังไม่ได้เชื่อมต่อ"
-            description="ใช้งานได้ แต่ event ที่ไม่มีชื่อโปรเจค (backup, task) จะไปลงช่องสำรอง"
+            title={t('overview.coolify.notConfigured')}
+            description={t('overview.coolify.notConfiguredDesc')}
             style={{ marginBottom: 16 }}
           />
         ) : c.error ? (
-          <Alert type="error" showIcon title="เชื่อมต่อไม่ได้" description={c.error} style={{ marginBottom: 16 }} />
+          <Alert type="error" showIcon title={t('overview.coolify.error')} description={c.error} style={{ marginBottom: 16 }} />
         ) : (
           <Row gutter={16} style={{ marginBottom: 16 }}>
             <Col xs={8}>
-              <Statistic title="โปรเจค" value={c.projects} />
+              <Statistic title={t('overview.coolify.projects')} value={c.projects} />
             </Col>
             <Col xs={8}>
-              <Statistic title="Resource" value={c.resources} />
+              <Statistic title={t('overview.coolify.resources')} value={c.resources} />
             </Col>
             <Col xs={8}>
               <Statistic
-                title="อัปเดตล่าสุด"
-                value={new Date(c.loaded_at).toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' })}
+                title={t('overview.coolify.updated')}
+                value={new Date(c.loaded_at).toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit' })}
               />
             </Col>
           </Row>
@@ -137,23 +135,23 @@ export default function OverviewPage() {
             <Col xs={24} md={12}>
               <Form.Item
                 name="coolify_url"
-                label="Coolify URL"
-                rules={[{ pattern: /^https?:\/\//, message: 'ต้องขึ้นต้นด้วย http:// หรือ https://' }]}
+                label={t('overview.coolify.url')}
+                rules={[{ pattern: /^https?:\/\//, message: t('common.urlScheme') }]}
               >
                 <Input placeholder="https://coolify.example.com" />
               </Form.Item>
             </Col>
             <Col xs={24} md={12}>
-              <Form.Item name="coolify_api_token" label="API token">
+              <Form.Item name="coolify_api_token" label={t('overview.coolify.token')}>
                 <Input.Password
                   autoComplete="off"
-                  placeholder={ov.coolify_token_set ? 'ตั้งไว้แล้ว — เว้นว่างเพื่อใช้ค่าเดิม' : 'วาง token'}
+                  placeholder={ov.coolify_token_set ? t('overview.coolify.tokenSet') : t('overview.coolify.tokenPaste')}
                 />
               </Form.Item>
             </Col>
           </Row>
           <Button type="primary" htmlType="submit" loading={saving}>
-            บันทึก
+            {t('common.save')}
           </Button>
         </Form>
       </Card>
@@ -161,22 +159,20 @@ export default function OverviewPage() {
       <Card
         title={
           <Flex gap={8}>
-            <SafetyOutlined /> 3. ช่องสำรอง
+            <SafetyOutlined /> {t('overview.fallback.title')}
           </Flex>
         }
       >
-        <Typography.Paragraph type="secondary">
-          ถ้า event ไม่ตรงกับกฎไหนเลย (เช่น event ของ server หรือข้อความทดสอบจาก Coolify) จะส่งมาที่นี่
-        </Typography.Paragraph>
+        <Typography.Paragraph type="secondary">{t('overview.fallback.help')}</Typography.Paragraph>
         <Select
           style={{ width: '100%', maxWidth: 420 }}
           value={ov.fallback_destination_id || 0}
           onChange={saveFallback}
           options={[
-            { value: 0, label: '— ไม่ส่ง (ทิ้ง) —' },
+            { value: 0, label: t('overview.fallback.none') },
             ...dests.map(d => ({ value: d.id, label: `${d.name} · ${TYPE_LABELS[d.type]}` })),
           ]}
-          notFoundContent="เพิ่มปลายทางก่อน"
+          notFoundContent={t('overview.fallback.empty')}
         />
       </Card>
     </Flex>

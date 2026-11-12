@@ -55,7 +55,9 @@ func (a *App) routes() http.Handler {
 		respond(w, err, list)
 	})
 	admin.HandleFunc("POST /api/simulate", a.handleSimulate)
-	admin.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) { writeErr(w, 404, "ไม่พบ API นี้") })
+	admin.HandleFunc("/api/", func(w http.ResponseWriter, _ *http.Request) {
+		writeErr(w, 404, L("ไม่พบ API นี้", "Unknown API endpoint"))
+	})
 
 	mux.HandleFunc("POST /api/login", a.handleLogin)
 	mux.HandleFunc("POST /api/logout", func(w http.ResponseWriter, r *http.Request) {
@@ -66,7 +68,7 @@ func (a *App) routes() http.Handler {
 
 	// The web UI (built React app). Unknown paths fall back to index.html.
 	mux.Handle("/", spaHandler(a.webFS))
-	return securityHeaders(mux)
+	return securityHeaders(withLang(mux))
 }
 
 func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
@@ -79,11 +81,11 @@ func (a *App) handleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	ok, wait := a.auth.checkLogin(clientIP(r), in.Username, in.Password)
 	if wait > 0 {
-		writeErr(w, http.StatusTooManyRequests, fmt.Sprintf("ใส่รหัสผิดหลายครั้ง ลองใหม่ในอีก %d นาที", int(wait.Minutes())+1))
+		writeErr(w, http.StatusTooManyRequests, L("ใส่รหัสผิดหลายครั้ง ลองใหม่ในอีก %d นาที", "Too many failed attempts. Try again in %d min.", int(wait.Minutes())+1))
 		return
 	}
 	if !ok {
-		writeErr(w, http.StatusUnauthorized, "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง")
+		writeErr(w, http.StatusUnauthorized, L("ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", "Incorrect username or password"))
 		return
 	}
 	a.auth.issue(w, r)
@@ -154,18 +156,18 @@ type overview struct {
 	Coolify         ResolverStatus `json:"coolify"`
 }
 
-func (a *App) overview() overview {
+func (a *App) overview(lang string) overview {
 	return overview{
 		HookPath:        "/hook/" + a.hookToken,
 		CoolifyURL:      a.store.Setting("coolify_url"),
 		CoolifyTokenSet: a.store.Setting("coolify_api_token") != "",
 		FallbackID:      a.store.FallbackID(),
-		Coolify:         a.resolver.Status(),
+		Coolify:         a.resolver.Status(lang),
 	}
 }
 
-func (a *App) handleOverview(w http.ResponseWriter, _ *http.Request) {
-	writeJSON(w, 200, a.overview())
+func (a *App) handleOverview(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, 200, a.overview(langOf(r)))
 }
 
 func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
@@ -181,18 +183,18 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 	if in.CoolifyURL != nil {
 		u := strings.TrimRight(strings.TrimSpace(*in.CoolifyURL), "/")
 		if u != "" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
-			writeErr(w, 400, "Coolify URL ต้องขึ้นต้นด้วย http:// หรือ https://")
+			writeErr(w, 400, L("Coolify URL ต้องขึ้นต้นด้วย http:// หรือ https://", "Coolify URL must start with http:// or https://"))
 			return
 		}
 		if err := a.store.SetSetting("coolify_url", u); err != nil {
-			writeErr(w, 500, err.Error())
+			writeErr(w, 500, err)
 			return
 		}
 		coolifyChanged = true
 	}
 	if in.CoolifyAPIToken != nil && strings.TrimSpace(*in.CoolifyAPIToken) != "" {
 		if err := a.store.SetSetting("coolify_api_token", strings.TrimSpace(*in.CoolifyAPIToken)); err != nil {
-			writeErr(w, 500, err.Error())
+			writeErr(w, 500, err)
 			return
 		}
 		coolifyChanged = true
@@ -201,13 +203,13 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		v := ""
 		if *in.FallbackID > 0 {
 			if _, err := a.store.GetDestination(*in.FallbackID); err != nil {
-				writeErr(w, 400, "ไม่พบปลายทางที่เลือก")
+				writeErr(w, 400, errDestMissing)
 				return
 			}
 			v = strconv.FormatInt(*in.FallbackID, 10)
 		}
 		if err := a.store.SetSetting("fallback_destination_id", v); err != nil {
-			writeErr(w, 500, err.Error())
+			writeErr(w, 500, err)
 			return
 		}
 	}
@@ -216,14 +218,14 @@ func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
 		_ = a.resolver.Refresh(ctx)
 		cancel()
 	}
-	writeJSON(w, 200, a.overview())
+	writeJSON(w, 200, a.overview(langOf(r)))
 }
 
 func (a *App) handleCoolifyRefresh(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	_ = a.resolver.Refresh(ctx)
-	writeJSON(w, 200, a.overview())
+	writeJSON(w, 200, a.overview(langOf(r)))
 }
 
 // ---- destinations ----
@@ -259,12 +261,16 @@ func (a *App) handleTestDestination(w http.ResponseWriter, r *http.Request) {
 		respond(w, err, nil)
 		return
 	}
-	raw := map[string]any{"success": true, "event": "test", "message": "ทดสอบจาก Webhook Router — ถ้าเห็นข้อความนี้แปลว่าเชื่อมต่อสำเร็จ"}
-	e := Event{Name: "test", Message: raw["message"].(string), Success: true, Raw: raw}
+	msg := "Test from Webhook Router — if you can see this, the destination works."
+	if langOf(r) == "th" {
+		msg = "ทดสอบจาก Webhook Router — ถ้าเห็นข้อความนี้แปลว่าเชื่อมต่อสำเร็จ"
+	}
+	raw := map[string]any{"success": true, "event": "test", "message": msg}
+	e := Event{Name: "test", Message: msg, Success: true, Raw: raw}
 	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
 	defer cancel()
 	if err := a.send(ctx, d, e); err != nil {
-		writeErr(w, 502, err.Error())
+		writeErr(w, 502, err)
 		return
 	}
 	writeJSON(w, 200, map[string]bool{"ok": true})
@@ -289,18 +295,18 @@ func (a *App) handleSaveRule(w http.ResponseWriter, r *http.Request) {
 func (a *App) handleSimulate(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
 	if err != nil {
-		writeErr(w, 400, err.Error())
+		writeErr(w, 400, err)
 		return
 	}
 	e, err := parseEvent(body)
 	if err != nil {
-		writeErr(w, 400, "JSON ไม่ถูกต้อง: "+err.Error())
+		writeErr(w, 400, L("JSON ไม่ถูกต้อง: %v", "Invalid JSON: %v", err))
 		return
 	}
 	a.enrich(r.Context(), &e)
 	dests, fallback, err := a.route(e)
 	if err != nil {
-		writeErr(w, 500, err.Error())
+		writeErr(w, 500, err)
 		return
 	}
 	names := []string{}
@@ -313,7 +319,7 @@ func (a *App) handleSimulate(w http.ResponseWriter, r *http.Request) {
 		case a.queue <- body:
 			sent = true
 		default:
-			writeErr(w, 503, "คิวเต็ม ลองใหม่อีกครั้ง")
+			writeErr(w, 503, L("คิวเต็ม ลองใหม่อีกครั้ง", "Queue is full, try again"))
 			return
 		}
 	}
@@ -349,7 +355,7 @@ func pathID(r *http.Request) int64 {
 
 func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(v); err != nil {
-		writeErr(w, 400, "JSON ไม่ถูกต้อง: "+err.Error())
+		writeErr(w, 400, L("JSON ไม่ถูกต้อง: %v", "Invalid JSON: %v", err))
 		return false
 	}
 	return true
@@ -358,9 +364,9 @@ func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
 func respond(w http.ResponseWriter, err error, v any) {
 	switch {
 	case errors.Is(err, errNotFound):
-		writeErr(w, 404, "ไม่พบข้อมูล")
+		writeErr(w, 404, L("ไม่พบข้อมูล", "Not found"))
 	case err != nil:
-		writeErr(w, 400, err.Error())
+		writeErr(w, 400, err)
 	case v == nil:
 		writeJSON(w, 200, map[string]bool{"ok": true})
 	default:
@@ -368,8 +374,17 @@ func respond(w http.ResponseWriter, err error, v any) {
 	}
 }
 
-func writeErr(w http.ResponseWriter, code int, msg string) {
-	writeJSON(w, code, map[string]string{"error": msg})
+// writeErr writes {"error": msg}; msg may be a string, an error or a *LocalError,
+// localized to the request language.
+func writeErr(w http.ResponseWriter, code int, msg any) {
+	var text string
+	switch m := msg.(type) {
+	case error:
+		text = localize(m, writerLang(w))
+	default:
+		text = fmt.Sprint(m)
+	}
+	writeJSON(w, code, map[string]string{"error": text})
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

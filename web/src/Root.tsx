@@ -1,8 +1,9 @@
 import { useEffect, useState, type ReactNode } from 'react'
-import { App, Button, Flex, Layout, Menu, Spin, Typography, theme } from 'antd'
+import { App, Avatar, Button, ConfigProvider, Dropdown, Flex, Layout, Menu, Spin, Typography, theme } from 'antd'
 import {
   BranchesOutlined,
   DashboardOutlined,
+  DownOutlined,
   ExperimentOutlined,
   HistoryOutlined,
   LogoutOutlined,
@@ -10,6 +11,8 @@ import {
   SwapOutlined,
 } from '@ant-design/icons'
 import { api, setUnauthorizedHandler } from './api'
+import { useI18n, type MessageKey } from './i18n'
+import LangSwitch from './components/LangSwitch'
 import Login from './pages/Login'
 import OverviewPage from './pages/Overview'
 import DestinationsPage from './pages/Destinations'
@@ -19,12 +22,12 @@ import SimulatePage from './pages/Simulate'
 
 type PageKey = 'overview' | 'destinations' | 'rules' | 'history' | 'simulate'
 
-const PAGES: { key: PageKey; label: string; icon: ReactNode; render: () => ReactNode }[] = [
-  { key: 'overview', label: 'ภาพรวม', icon: <DashboardOutlined />, render: () => <OverviewPage /> },
-  { key: 'destinations', label: 'ปลายทาง', icon: <SendOutlined />, render: () => <DestinationsPage /> },
-  { key: 'rules', label: 'กฎ', icon: <BranchesOutlined />, render: () => <RulesPage /> },
-  { key: 'history', label: 'ประวัติ', icon: <HistoryOutlined />, render: () => <HistoryPage /> },
-  { key: 'simulate', label: 'ทดลอง', icon: <ExperimentOutlined />, render: () => <SimulatePage /> },
+const PAGES: { key: PageKey; label: MessageKey; icon: ReactNode; render: () => ReactNode }[] = [
+  { key: 'overview', label: 'nav.overview', icon: <DashboardOutlined />, render: () => <OverviewPage /> },
+  { key: 'destinations', label: 'nav.destinations', icon: <SendOutlined />, render: () => <DestinationsPage /> },
+  { key: 'rules', label: 'nav.rules', icon: <BranchesOutlined />, render: () => <RulesPage /> },
+  { key: 'history', label: 'nav.history', icon: <HistoryOutlined />, render: () => <HistoryPage /> },
+  { key: 'simulate', label: 'nav.simulate', icon: <ExperimentOutlined />, render: () => <SimulatePage /> },
 ]
 
 const pageFromHash = (): PageKey => {
@@ -32,7 +35,7 @@ const pageFromHash = (): PageKey => {
   return (PAGES.find(p => p.key === key)?.key ?? 'overview') as PageKey
 }
 
-export default function Root({ dark }: { dark: boolean }) {
+export default function Root() {
   const [auth, setAuth] = useState<'loading' | 'out' | 'in'>('loading')
   const [user, setUser] = useState('')
 
@@ -63,12 +66,13 @@ export default function Root({ dark }: { dark: boolean }) {
       />
     )
   }
-  return <Shell user={user} dark={dark} onLogout={() => setAuth('out')} />
+  return <Shell user={user} onLogout={() => setAuth('out')} />
 }
 
-function Shell({ user, dark, onLogout }: { user: string; dark: boolean; onLogout: () => void }) {
+function Shell({ user, onLogout }: { user: string; onLogout: () => void }) {
   const { token } = theme.useToken()
   const { message } = App.useApp()
+  const { t } = useI18n()
   const [page, setPage] = useState<PageKey>(pageFromHash)
 
   useEffect(() => {
@@ -79,7 +83,7 @@ function Shell({ user, dark, onLogout }: { user: string; dark: boolean; onLogout
 
   const logout = async () => {
     await api('/api/logout', { method: 'POST' }).catch(() => {})
-    message.success('ออกจากระบบแล้ว')
+    message.success(t('shell.loggedOut'))
     onLogout()
   }
 
@@ -92,35 +96,81 @@ function Shell({ user, dark, onLogout }: { user: string; dark: boolean; onLogout
           position: 'sticky',
           top: 0,
           zIndex: 10,
-          display: 'flex',
-          alignItems: 'center',
-          gap: 16,
-          paddingInline: 16,
-          background: token.colorBgContainer,
+          height: 64,
+          lineHeight: 'normal',
+          paddingInline: 0,
+          background: `color-mix(in srgb, ${token.colorBgContainer} 82%, transparent)`,
+          backdropFilter: 'saturate(180%) blur(12px)',
+          WebkitBackdropFilter: 'saturate(180%) blur(12px)',
           borderBottom: `1px solid ${token.colorBorderSecondary}`,
         }}
       >
-        <Flex align="center" gap={8} style={{ flexShrink: 0 }}>
-          <SwapOutlined style={{ fontSize: 20, color: token.colorPrimary }} />
-          <Typography.Text strong style={{ fontSize: 16, whiteSpace: 'nowrap' }}>
-            Webhook Router
-          </Typography.Text>
-        </Flex>
-        <Menu
-          mode="horizontal"
-          theme={dark ? 'dark' : 'light'}
-          selectedKeys={[page]}
-          onClick={e => {
-            window.location.hash = e.key
-          }}
-          items={PAGES.map(p => ({ key: p.key, label: p.label, icon: p.icon }))}
-          style={{ flex: 1, minWidth: 0, borderBottom: 'none', background: 'transparent' }}
-        />
-        <Flex align="center" gap={8} style={{ flexShrink: 0 }}>
-          <Typography.Text type="secondary" className="hide-mobile">
-            {user}
-          </Typography.Text>
-          <Button icon={<LogoutOutlined />} onClick={logout} title="ออกจากระบบ" />
+        <Flex align="center" gap={16} className="nav-inner">
+          <a href="#overview" className="brand">
+            <span
+              className="brand-mark"
+              style={{ background: `linear-gradient(135deg, ${token.colorPrimary}, ${token['purple-4']})` }}
+            >
+              <SwapOutlined />
+            </span>
+            <span className="brand-text">
+              <Typography.Text strong style={{ fontSize: 15, lineHeight: 1.2 }}>
+                Webhook Router
+              </Typography.Text>
+              <Typography.Text type="secondary" style={{ fontSize: 11, lineHeight: 1.2 }}>
+                for Coolify
+              </Typography.Text>
+            </span>
+          </a>
+
+          <ConfigProvider
+            theme={{
+              components: {
+                Menu: {
+                  itemBg: 'transparent',
+                  horizontalLineHeight: '62px',
+                  activeBarHeight: 2,
+                  itemPaddingInline: 14,
+                  horizontalItemSelectedColor: token.colorPrimary,
+                  horizontalItemHoverColor: token.colorText,
+                  itemColor: token.colorTextSecondary,
+                },
+              },
+            }}
+          >
+            <Menu
+              mode="horizontal"
+              selectedKeys={[page]}
+              onClick={e => {
+                window.location.hash = e.key
+              }}
+              items={PAGES.map(p => ({ key: p.key, label: t(p.label), icon: p.icon }))}
+              style={{ flex: 1, minWidth: 0, alignSelf: 'stretch', height: 63, lineHeight: '61px', borderBottom: 'none' }}
+            />
+          </ConfigProvider>
+
+          <LangSwitch />
+          <Dropdown
+            trigger={['click']}
+            placement="bottomRight"
+            menu={{
+              items: [
+                { key: 'user', label: t('shell.signedInAs', { user }), disabled: true },
+                { type: 'divider' },
+                { key: 'logout', label: t('shell.logout'), icon: <LogoutOutlined />, danger: true, onClick: logout },
+              ],
+            }}
+          >
+            <Button type="text" style={{ height: 40, paddingInline: 6, flexShrink: 0 }}>
+              <Flex align="center" gap={8}>
+                <Avatar size={28} style={{ background: token.colorPrimaryBg, color: token.colorPrimary, fontWeight: 600 }}>
+                  {user.charAt(0).toUpperCase()}
+                </Avatar>
+                <span className="hide-mobile">{user}</span>
+                <DownOutlined style={{ fontSize: 10, color: token.colorTextTertiary }} />
+              </Flex>
+            </Button>
+          </Dropdown>
         </Flex>
       </Layout.Header>
       <Layout.Content>

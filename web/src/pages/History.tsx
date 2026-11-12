@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { App, Button, Card, Flex, Switch, Table, Tag, Typography } from 'antd'
 import { CheckCircleFilled, CloseCircleFilled, ReloadOutlined } from '@ant-design/icons'
 import { api, errorText } from '../api'
+import { useI18n } from '../i18n'
 import type { Delivery } from '../types'
 
 const pretty = (s: string) => {
@@ -14,6 +15,7 @@ const pretty = (s: string) => {
 
 export default function HistoryPage() {
   const { message } = App.useApp()
+  const { t, dateLocale } = useI18n()
   const [rows, setRows] = useState<Delivery[]>([])
   const [loading, setLoading] = useState(true)
   const [auto, setAuto] = useState(false)
@@ -40,13 +42,15 @@ export default function HistoryPage() {
   }, [auto, load])
 
   const failed = rows.filter(r => !r.ok).length
+  // The server stores this one message verbatim; everything else is a raw delivery error.
+  const errText = (e: string) => (e === 'no matching rule and no fallback destination' ? t('history.noRoute') : e)
 
   return (
     <Card
       title={
         <Flex gap={8} align="center">
-          ประวัติล่าสุด
-          {failed > 0 && <Tag color="error">ไม่สำเร็จ {failed}</Tag>}
+          {t('history.title')}
+          {failed > 0 && <Tag color="error">{t('history.failed', { n: failed })}</Tag>}
         </Flex>
       }
       extra={
@@ -54,11 +58,11 @@ export default function HistoryPage() {
           <Flex gap={6} align="center">
             <Switch size="small" checked={auto} onChange={setAuto} />
             <Typography.Text type="secondary" className="hide-mobile">
-              อัปเดตอัตโนมัติ
+              {t('history.auto')}
             </Typography.Text>
           </Flex>
           <Button icon={<ReloadOutlined />} onClick={load} loading={loading && !auto}>
-            รีเฟรช
+            {t('common.refresh')}
           </Button>
         </Flex>
       }
@@ -70,11 +74,11 @@ export default function HistoryPage() {
         loading={loading && !rows.length}
         pagination={{ pageSize: 25, hideOnSinglePage: true, showSizeChanger: false }}
         scroll={{ x: 760 }}
-        locale={{ emptyText: 'ยังไม่มี event เข้ามา — ลองกด "Send test" ใน Coolify' }}
+        locale={{ emptyText: t('history.empty') }}
         expandable={{
           expandedRowRender: r => (
             <Flex vertical gap={8}>
-              {r.error && <Typography.Text type="danger">{r.error}</Typography.Text>}
+              {r.error && <Typography.Text type="danger">{errText(r.error)}</Typography.Text>}
               <pre className="payload mono">{pretty(r.payload)}</pre>
             </Flex>
           ),
@@ -92,18 +96,18 @@ export default function HistoryPage() {
               ),
           },
           {
-            title: 'เวลา',
+            title: t('history.col.time'),
             dataIndex: 'time',
             width: 170,
             render: (t: string) => (
               <Typography.Text type="secondary">
-                {new Date(t).toLocaleString('th-TH', { dateStyle: 'short', timeStyle: 'medium' })}
+                {new Date(t).toLocaleString(dateLocale, { dateStyle: 'short', timeStyle: 'medium' })}
               </Typography.Text>
             ),
           },
-          { title: 'Event', dataIndex: 'event', render: v => <Typography.Text code>{v}</Typography.Text> },
+          { title: t('common.event'), dataIndex: 'event', render: v => <Typography.Text code>{v}</Typography.Text> },
           {
-            title: 'โปรเจค',
+            title: t('common.project'),
             render: (_, r) =>
               r.project ? (
                 <span>
@@ -114,16 +118,16 @@ export default function HistoryPage() {
                 <Typography.Text type="secondary">—</Typography.Text>
               ),
           },
-          { title: 'Resource', dataIndex: 'resource', render: v => v || <Typography.Text type="secondary">—</Typography.Text> },
+          { title: t('common.resource'), dataIndex: 'resource', render: v => v || <Typography.Text type="secondary">—</Typography.Text> },
           {
-            title: 'ส่งไปที่',
+            title: t('common.sendTo'),
             dataIndex: 'destination',
             render: (v: string, r) => (
               <Flex vertical>
                 <span>{v}</span>
                 {!r.ok && (
                   <Typography.Text type="danger" ellipsis style={{ maxWidth: 260, fontSize: 12 }}>
-                    {r.error}
+                    {errText(r.error)}
                   </Typography.Text>
                 )}
               </Flex>

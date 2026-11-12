@@ -267,3 +267,24 @@ func TestAuth(t *testing.T) {
 		t.Fatalf("spa fallback: %d", r.StatusCode)
 	}
 }
+
+func TestLocalizedErrors(t *testing.T) {
+	app := &App{auth: NewAuth("admin", "pw", []byte("k")), webFS: fstest.MapFS{}}
+	srv := httptest.NewServer(app.routes())
+	defer srv.Close()
+	for lang, want := range map[string]string{"th": "ชื่อผู้ใช้หรือรหัสผ่านไม่ถูกต้อง", "en": "Incorrect username or password"} {
+		req, _ := http.NewRequest("POST", srv.URL+"/api/login", strings.NewReader(`{"username":"admin","password":"x"}`))
+		req.Header.Set("Accept-Language", lang)
+		req.Header.Set("X-Forwarded-For", "9.9.9."+lang)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var body map[string]string
+		json.NewDecoder(resp.Body).Decode(&body)
+		resp.Body.Close()
+		if body["error"] != want {
+			t.Errorf("%s: got %q want %q", lang, body["error"], want)
+		}
+	}
+}

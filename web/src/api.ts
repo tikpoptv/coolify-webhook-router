@@ -7,6 +7,12 @@ export class ApiError extends Error {
 }
 
 let onUnauthorized: () => void = () => {}
+let apiLang = 'en'
+
+/** Language the server should use for error messages. */
+export function setApiLang(lang: string) {
+  apiLang = lang
+}
 
 /** Called whenever an API request returns 401 (session expired). */
 export function setUnauthorizedHandler(fn: () => void) {
@@ -17,9 +23,10 @@ export async function api<T = unknown>(
   path: string,
   opts: { method?: string; body?: unknown } = {},
 ): Promise<T> {
-  const init: RequestInit = { method: opts.method ?? 'GET', credentials: 'same-origin' }
+  const headers: Record<string, string> = { 'Accept-Language': apiLang }
+  const init: RequestInit = { method: opts.method ?? 'GET', credentials: 'same-origin', headers }
   if (opts.body !== undefined) {
-    init.headers = { 'Content-Type': 'application/json' }
+    headers['Content-Type'] = 'application/json'
     init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body)
   }
   const res = await fetch(path, init)
