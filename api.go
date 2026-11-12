@@ -1,0 +1,325 @@
+package main
+
+import (
+	"context"
+	"crypto/subtle"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"strconv"
+	"strings"
+	"time"
+)
+
+func (a *App) routes() http.Handler {
+	mux := http.NewServeMux()
+
+	// Public: Coolify posts here. The token in the path is the only auth Coolify supports.
+	mux.HandleFunc("POST /hook/{token}", a.handleHook)
+	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) { w.Write([]byte("ok")) })
+
+	// Admin UI + API, behind basic auth.
+	admin := http.NewServeMux()
+	admin.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(indexHTML)
+	})
+	admin.HandleFunc("GET /api/overview", a.handleOverview)
+	admin.HandleFunc("PUT /api/settings", a.handleSettings)
+	admin.HandleFunc("POST /api/coolify/refresh", a.handleCoolifyRefresh)
+	admin.HandleFunc("GET /api/projects", func(w http.ResponseWriter, _ *http.Request) { writeJSON(w, 200, a.resolver.Projects()) })
+
+	admin.HandleFunc("GET /api/destinations", a.handleListDestinations)
+	admin.HandleFunc("POST /api/destinations", a.handleSaveDestination)
+	admin.HandleFunc("PUT /api/destinations/{id}", a.handleSaveDestination)
+	admin.HandleFunc("DELETE /api/destinations/{id}", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, a.store.DeleteDestination(pathID(r)), nil)
+	})
+	admin.HandleFunc("POST /api/destinations/{id}/test", a.handleTestDestination)
+
+	admin.HandleFunc("GET /api/rules", func(w http.ResponseWriter, _ *http.Request) {
+		rules, err := a.store.ListRules()
+		respond(w, err, rules)
+	})
+	admin.HandleFunc("POST /api/rules", a.handleSaveRule)
+	admin.HandleFunc("PUT /api/rules/{id}", a.handleSaveRule)
+	admin.HandleFunc("DELETE /api/rules/{id}", func(w http.ResponseWriter, r *http.Request) {
+		respond(w, a.store.DeleteRule(pathID(r)), nil)
+	})
+
+	admin.HandleFunc("GET /api/deliveries", func(w http.ResponseWriter, _ *http.Request) {
+		list, err := a.store.ListDeliveries(200)
+		respond(w, err, list)
+	})
+	admin.HandleFunc("POST /api/simulate", a.handleSimulate)
+
+	mux.Handle("/", a.basicAuth(admin))
+	return mux
+}
+
+func (a *App) basicAuth(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		u, p, ok := r.BasicAuth()
+		if !ok || subtle.ConstantTimeCompare([]byte(u), []byte(a.adminUser)) != 1 ||
+			subtle.ConstantTimeCompare([]byte(p), []byte(a.adminPass)) != 1 {
+			w.Header().Set("WWW-Authenticate", `Basic realm="webhook-router", charset="UTF-8"`)
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func (a *App) handleHook(w http.ResponseWriter, r *http.Request) {
+	if subtle.ConstantTimeCompare([]byte(r.PathValue("token")), []byte(a.hookToken)) != 1 {
+		http.NotFound(w, r)
+		return
+	}
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil || !json.Valid(body) {
+		http.Error(w, "invalid JSON body", http.StatusBadRequest)
+		return
+	}
+	select {
+	case a.queue <- body:
+		writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	default:
+		// Coolify retries 5xx, so a full queue just delays delivery.
+		http.Error(w, "queue full", http.StatusServiceUnavailable)
+	}
+}
+
+// ---- overview / settings ----
+
+type overview struct {
+	HookPath        string         `json:"hook_path"`
+	CoolifyURL      string         `json:"coolify_url"`
+	CoolifyTokenSet bool           `json:"coolify_token_set"`
+	FallbackID      int64          `json:"fallback_destination_id"`
+	Coolify         ResolverStatus `json:"coolify"`
+}
+
+func (a *App) overview() overview {
+	return overview{
+		HookPath:        "/hook/" + a.hookToken,
+		CoolifyURL:      a.store.Setting("coolify_url"),
+		CoolifyTokenSet: a.store.Setting("coolify_api_token") != "",
+		FallbackID:      a.store.FallbackID(),
+		Coolify:         a.resolver.Status(),
+	}
+}
+
+func (a *App) handleOverview(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, 200, a.overview())
+}
+
+func (a *App) handleSettings(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CoolifyURL      *string `json:"coolify_url"`
+		CoolifyAPIToken *string `json:"coolify_api_token"`
+		FallbackID      *int64  `json:"fallback_destination_id"`
+	}
+	if !readJSON(w, r, &in) {
+		return
+	}
+	coolifyChanged := false
+	if in.CoolifyURL != nil {
+		u := strings.TrimRight(strings.TrimSpace(*in.CoolifyURL), "/")
+		if u != "" && !strings.HasPrefix(u, "http://") && !strings.HasPrefix(u, "https://") {
+			writeErr(w, 400, "Coolify URL ต้องขึ้นต้นด้วย http:// หรือ https://")
+			return
+		}
+		if err := a.store.SetSetting("coolify_url", u); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		coolifyChanged = true
+	}
+	if in.CoolifyAPIToken != nil && strings.TrimSpace(*in.CoolifyAPIToken) != "" {
+		if err := a.store.SetSetting("coolify_api_token", strings.TrimSpace(*in.CoolifyAPIToken)); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+		coolifyChanged = true
+	}
+	if in.FallbackID != nil {
+		v := ""
+		if *in.FallbackID > 0 {
+			if _, err := a.store.GetDestination(*in.FallbackID); err != nil {
+				writeErr(w, 400, "ไม่พบปลายทางที่เลือก")
+				return
+			}
+			v = strconv.FormatInt(*in.FallbackID, 10)
+		}
+		if err := a.store.SetSetting("fallback_destination_id", v); err != nil {
+			writeErr(w, 500, err.Error())
+			return
+		}
+	}
+	if coolifyChanged {
+		ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+		_ = a.resolver.Refresh(ctx)
+		cancel()
+	}
+	writeJSON(w, 200, a.overview())
+}
+
+func (a *App) handleCoolifyRefresh(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	_ = a.resolver.Refresh(ctx)
+	writeJSON(w, 200, a.overview())
+}
+
+// ---- destinations ----
+
+func (a *App) handleListDestinations(w http.ResponseWriter, _ *http.Request) {
+	list, err := a.store.ListDestinations()
+	for i := range list {
+		list[i].URL = mask(list[i].URL)
+	}
+	respond(w, err, list)
+}
+
+func (a *App) handleSaveDestination(w http.ResponseWriter, r *http.Request) {
+	var d Destination
+	if !readJSON(w, r, &d) {
+		return
+	}
+	d.ID = 0
+	if r.PathValue("id") != "" {
+		d.ID = pathID(r)
+	}
+	if err := a.store.SaveDestination(&d); err != nil {
+		respond(w, err, nil)
+		return
+	}
+	d.URL = mask(d.URL)
+	writeJSON(w, 200, d)
+}
+
+func (a *App) handleTestDestination(w http.ResponseWriter, r *http.Request) {
+	d, err := a.store.GetDestination(pathID(r))
+	if err != nil {
+		respond(w, err, nil)
+		return
+	}
+	raw := map[string]any{"success": true, "event": "test", "message": "ทดสอบจาก Webhook Router — ถ้าเห็นข้อความนี้แปลว่าเชื่อมต่อสำเร็จ"}
+	e := Event{Name: "test", Message: raw["message"].(string), Success: true, Raw: raw}
+	ctx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+	defer cancel()
+	if err := a.send(ctx, d, e); err != nil {
+		writeErr(w, 502, err.Error())
+		return
+	}
+	writeJSON(w, 200, map[string]bool{"ok": true})
+}
+
+// ---- rules ----
+
+func (a *App) handleSaveRule(w http.ResponseWriter, r *http.Request) {
+	var rule Rule
+	if !readJSON(w, r, &rule) {
+		return
+	}
+	rule.ID = 0
+	if r.PathValue("id") != "" {
+		rule.ID = pathID(r)
+	}
+	respond(w, a.store.SaveRule(&rule), rule)
+}
+
+// ---- simulate ----
+
+func (a *App) handleSimulate(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 1<<20))
+	if err != nil {
+		writeErr(w, 400, err.Error())
+		return
+	}
+	e, err := parseEvent(body)
+	if err != nil {
+		writeErr(w, 400, "JSON ไม่ถูกต้อง: "+err.Error())
+		return
+	}
+	a.enrich(r.Context(), &e)
+	dests, fallback, err := a.route(e)
+	if err != nil {
+		writeErr(w, 500, err.Error())
+		return
+	}
+	names := []string{}
+	for _, d := range dests {
+		names = append(names, d.Name)
+	}
+	sent := false
+	if r.URL.Query().Get("send") == "1" {
+		select {
+		case a.queue <- body:
+			sent = true
+		default:
+			writeErr(w, 503, "คิวเต็ม ลองใหม่อีกครั้ง")
+			return
+		}
+	}
+	writeJSON(w, 200, map[string]any{
+		"event":        e.Name,
+		"project":      e.Project,
+		"environment":  e.Environment,
+		"resource":     e.Resource,
+		"destinations": names,
+		"fallback":     fallback,
+		"sent":         sent,
+	})
+}
+
+// ---- helpers ----
+
+func mask(s string) string {
+	r := []rune(s)
+	if len(r) <= 12 {
+		return strings.Repeat("•", len(r))
+	}
+	keep := len(r) / 3
+	if keep > 40 {
+		keep = 40
+	}
+	return string(r[:keep]) + "••••••"
+}
+
+func pathID(r *http.Request) int64 {
+	id, _ := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	return id
+}
+
+func readJSON(w http.ResponseWriter, r *http.Request, v any) bool {
+	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1<<20)).Decode(v); err != nil {
+		writeErr(w, 400, "JSON ไม่ถูกต้อง: "+err.Error())
+		return false
+	}
+	return true
+}
+
+func respond(w http.ResponseWriter, err error, v any) {
+	switch {
+	case errors.Is(err, errNotFound):
+		writeErr(w, 404, "ไม่พบข้อมูล")
+	case err != nil:
+		writeErr(w, 400, err.Error())
+	case v == nil:
+		writeJSON(w, 200, map[string]bool{"ok": true})
+	default:
+		writeJSON(w, 200, v)
+	}
+}
+
+func writeErr(w http.ResponseWriter, code int, msg string) {
+	writeJSON(w, code, map[string]string{"error": msg})
+}
+
+func writeJSON(w http.ResponseWriter, code int, v any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(code)
+	_ = json.NewEncoder(w).Encode(v)
+}
