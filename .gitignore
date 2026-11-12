@@ -1,5 +1,6 @@
 /data/
 /router
+/coolify-webhook-router
 *.db
 *.db-*
 web/node_modules/
